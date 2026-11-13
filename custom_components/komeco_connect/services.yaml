@@ -1,0 +1,22 @@
+probe_lan:
+  name: Probe LAN
+  description: Probe the configured LAN host for the experimental Komeco local protocol and refresh diagnostics.
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: Optional. When omitted, every Komeco Connect entry with a LAN host is probed.
+      required: false
+      selector:
+        text:
+
+discover_lan:
+  name: Discover LAN
+  description: Scan the local /24 (or a given CIDR) for open IoT ports. Diagnostic only — open ports are not guaranteed to be Komeco heaters.
+  fields:
+    network:
+      name: Network CIDR
+      description: Optional IPv4 network such as 10.0.1.0/24. Defaults to the HA host /24.
+      required: false
+      example: 10.0.1.0/24
+      selector:
+        text:

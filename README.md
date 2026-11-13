@@ -28,12 +28,31 @@ Unofficial Home Assistant integration for Komeco devices.
   - "Today" and "This Month" totals aggregated from `/getDataset?name=daily`, exposed as `gas`/`water` device-class sensors (`TOTAL_INCREASING`) so they feed the HA Energy dashboard
 - Realtime MQTT-over-WebSocket shadow updates for near-instant state changes.
 - Polling fallback (`30s` default) for resilience.
+- **Experimental LAN transport** (options → connection mode):
+  - `cloud` (default): same as before
+  - `auto`: prefer LAN when a local bridge answers the experimental protocol, otherwise cloud
+  - `lan`: LAN only (fails if the host does not speak the local protocol)
+  - Diagnostic entities: `Connection Transport`, `LAN Reachable`
+  - Services: `komeco_connect.probe_lan`, `komeco_connect.discover_lan`
+
+## Experimental LAN protocol
+
+Stock Connect Komeco gas heaters (HF-LPT130B class modules) appear to talk **outbound to AWS IoT only**. Community captures have not found a stable inbound HTTP/MQTT control API on the heater itself.
+
+This integration therefore defines an **experimental local protocol** (same command shape as the cloud API) intended for a future local bridge / firmware:
+
+- `GET /api/v1/state` → JSON state (`shadow_reported` / `command_values` / …)
+- `POST /api/v1/command` → `{"switch": true, "temp_set": 40, ...}`
+- Alternate paths: `/komeco/state`, `/komeco/command`, `/api/state`, `/state`, …
+- Optional TCP JSON-lines on ports such as `8899` (`{"type":"get_state"}` / `{"type":"command","payload":{...}}`)
+
+Until a device or bridge answers that protocol, leave **Connection mode = Cloud** (or Auto with no host).
 
 ## Value Source Priority
 
 For control state fields (`switch`, `temp_set`, `zero_cold_water_mode`, `zero_cold_water_mode_status`), the integration resolves values in this order:
 
-1. AWS IoT Device Shadow `state.reported`
+1. AWS IoT Device Shadow `state.reported` (or LAN reported state when transport is LAN)
 2. `getGasHeaterParamsDash`
 3. Latest `commandHistory-get` entry
 
@@ -42,18 +61,19 @@ Short command overrides are applied to reduce flicker from delayed history refre
 ## Installation (HACS - Recommended)
 
 1. In Home Assistant, open **HACS -> Integrations -> Custom repositories**.
-2. Add `https://github.com/cunhacf/komeco-connect` as type **Integration**.
+2. Add `https://github.com/rubensflinco/komeco-connect` as type **Integration** (or upstream `cunhacf/komeco-connect` once the LAN PR is merged).
 3. Search for **Komeco Connect** in HACS and install.
 4. Restart Home Assistant.
 5. Go to **Settings -> Devices & Services -> Add Integration**.
 6. Add **Komeco Connect** and enter email/password.
+7. Optional: open the integration **Configure** menu to set LAN host / connection mode.
 
-## Manual Installation
+## Manual Installation (test ZIP)
 
-1. Copy `custom_components/komeco_connect` from this repo to your Home Assistant config directory under `custom_components/komeco_connect`.
-2. Restart Home Assistant.
-3. Go to **Settings -> Devices & Services -> Add Integration**.
-4. Add **Komeco Connect** and enter email/password.
+1. Download `komeco_connect-YYYY.MM.DD.N.zip` from [Releases](https://github.com/rubensflinco/komeco-connect/releases) (or build with `python scripts/build_ha_package.py`).
+2. Unzip so you get `custom_components/komeco_connect/` inside your HA config directory.
+3. Restart Home Assistant.
+4. Add the integration as above.
 
 ## Token Handling
 
@@ -79,6 +99,7 @@ Debug coverage includes:
 - shadow candidate selection/failover
 - coordinator polling, command overrides, and token persistence
 - realtime MQTT connect/subscribe/reconnect/message handling
+- LAN probe / discovery / transport selection
 
 ## Known Limitations
 
@@ -92,3 +113,4 @@ Debug coverage includes:
 - A successful empty period dataset is exposed as zero consumption; request failures remain unavailable.
 - Backend command endpoint path is `send-commmand` (three `m`) and must remain unchanged.
 - `tuyaId` seen in metadata is not directly usable for local Tuya control in this integration.
+- **LAN mode is experimental.** Stock KO 38D Prime Wi‑Fi units scanned on a typical home LAN did not expose inbound control ports; true offline control needs a discovered local protocol or a local bridge that speaks the experimental API above.

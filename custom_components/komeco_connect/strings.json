@@ -16,5 +16,24 @@
       "no_devices": "No supported Komeco device was found for this integration",
       "unknown": "Unexpected error"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Komeco Connect options",
+        "description": "Cloud works with the official Connect Komeco account. LAN mode is experimental: stock heaters usually have no inbound LAN API yet. Use Auto to prefer LAN when a local bridge answers, otherwise keep using the cloud.",
+        "data": {
+          "connection_mode": "Connection mode",
+          "lan_host": "LAN host / IP",
+          "lan_port": "LAN port",
+          "lan_ssl": "Use HTTPS"
+        }
+      }
+    },
+    "error": {
+      "lan_host_required": "LAN host is required for LAN or Auto mode",
+      "lan_unreachable": "LAN host did not answer the experimental local protocol",
+      "unknown": "Unexpected error"
+    }
   }
 }

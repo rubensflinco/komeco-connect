@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -57,6 +58,7 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     entities: list[BinarySensorEntity] = [
         KomecoStatusBinarySensor(coordinator),
+        KomecoLanReachableBinarySensor(coordinator),
         KomecoShadowBinarySensor(coordinator, "connected"),
         KomecoShadowBinarySensor(coordinator, "state_antifreeze"),
         KomecoShadowBinarySensor(coordinator, "state_flame"),
@@ -65,6 +67,35 @@ async def async_setup_entry(
     ]
 
     async_add_entities(entities)
+
+
+class KomecoLanReachableBinarySensor(KomecoEntity, BinarySensorEntity):
+    """Whether the last poll used LAN or LAN is currently preferred and healthy."""
+
+    _attr_name = "LAN Reachable"
+    _attr_icon = "mdi:lan-check"
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.api.device_id}_lan_reachable"
+
+    @property
+    def is_on(self) -> bool | None:
+        """True when transport is lan."""
+        transport = self.coordinator.data.get("transport")
+        if transport == "lan":
+            return True
+        if self.coordinator.lan is None:
+            return False
+        # Auto/cloud fallback with a configured host that recently failed.
+        if self.coordinator.data.get("lan_error"):
+            return False
+        probe = self.coordinator.data.get("lan_probe")
+        if isinstance(probe, dict) and probe.get("http_ok"):
+            return True
+        return False
 
 
 class KomecoStatusBinarySensor(KomecoEntity, BinarySensorEntity):

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.11.13.0 (2026-11-13)
+
+- Add experimental LAN transport with connection modes `cloud` / `auto` / `lan`.
+- Add options flow for LAN host, port, and HTTPS.
+- Add diagnostic entities `Connection Transport` and `LAN Reachable`.
+- Add services `komeco_connect.probe_lan` and `komeco_connect.discover_lan`.
+- Document experimental local HTTP/TCP JSON protocol for future bridges.
+- Keep cloud polling + realtime MQTT as the default path for stock heaters.
+
 ## 2026.8.1.1 (2026-08-01)
 
 - Show zero totals for successful empty consumption periods.

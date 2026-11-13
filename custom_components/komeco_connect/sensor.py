@@ -75,7 +75,11 @@ async def async_setup_entry(
 ) -> None:
     """Set up Komeco sensor entities."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    entities: list[SensorEntity] = [KomecoLastCommandSensor(coordinator), KomecoShadowTimestampSensor(coordinator)]
+    entities: list[SensorEntity] = [
+        KomecoLastCommandSensor(coordinator),
+        KomecoShadowTimestampSensor(coordinator),
+        KomecoTransportSensor(coordinator),
+    ]
 
     reported = coordinator.data.get("shadow_reported", {})
     if isinstance(reported, dict):
@@ -153,6 +157,42 @@ class KomecoLastCommandSensor(KomecoEntity, SensorEntity):
         if parsed.tzinfo is None:
             return dt_util.as_utc(parsed)
         return parsed
+
+
+class KomecoTransportSensor(KomecoEntity, SensorEntity):
+    """Active transport used for the last successful poll/command."""
+
+    _attr_name = "Connection Transport"
+    _attr_icon = "mdi:lan"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.api.device_id}_transport"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return cloud / lan / unknown."""
+        value = self.coordinator.data.get("transport")
+        return value if isinstance(value, str) else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose LAN diagnostics."""
+        data = self.coordinator.data if isinstance(self.coordinator.data, dict) else {}
+        attrs: dict[str, Any] = {}
+        for key in (
+            "transport_detail",
+            "lan_host",
+            "lan_port",
+            "lan_error",
+            "lan_probe",
+            "lan_discovery",
+        ):
+            if key in data and data[key] not in (None, {}, []):
+                attrs[key] = data[key]
+        attrs["connection_mode"] = self.coordinator.connection_mode
+        return attrs
 
 
 class KomecoShadowTimestampSensor(KomecoEntity, SensorEntity):

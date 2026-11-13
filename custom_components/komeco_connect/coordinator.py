@@ -15,19 +15,25 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import KomecoApiClient, KomecoApiError, KomecoAuthError, _as_bool, _as_int
 from .const import (
     CONF_ACCESS_TOKEN,
+    CONF_CONNECTION_MODE,
     CONF_ID_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_SUB,
+    CONNECTION_MODE_AUTO,
+    CONNECTION_MODE_CLOUD,
+    CONNECTION_MODE_LAN,
+    DEFAULT_CONNECTION_MODE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
+from .lan import KomecoLanClient, KomecoLanError
 
 _LOGGER = logging.getLogger(__name__)
 COMMAND_OVERRIDE_SECONDS = 180.0
 
 
 class KomecoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator for Komeco API polling."""
+    """Coordinator for Komeco API polling with optional LAN transport."""
 
     def __init__(
         self,
@@ -35,6 +41,7 @@ class KomecoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         hass: HomeAssistant,
         entry: ConfigEntry,
         api: KomecoApiClient,
+        lan: KomecoLanClient | None = None,
     ) -> None:
         interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
         super().__init__(
@@ -45,10 +52,50 @@ class KomecoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.entry = entry
         self.api = api
+        self.lan = lan
         self._command_overrides: dict[str, tuple[Any, float]] = {}
 
+    @property
+    def connection_mode(self) -> str:
+        """Return configured transport preference."""
+        mode = self.entry.options.get(CONF_CONNECTION_MODE, DEFAULT_CONNECTION_MODE)
+        return mode if mode in {CONNECTION_MODE_CLOUD, CONNECTION_MODE_LAN, CONNECTION_MODE_AUTO} else DEFAULT_CONNECTION_MODE
+
     async def _async_update_data(self) -> dict[str, Any]:
-        _LOGGER.debug("Coordinator polling update started entry_id=%s", self.entry.entry_id)
+        _LOGGER.debug(
+            "Coordinator polling update started entry_id=%s mode=%s lan=%s",
+            self.entry.entry_id,
+            self.connection_mode,
+            bool(self.lan),
+        )
+        mode = self.connection_mode
+        lan_error: str | None = None
+
+        if mode in {CONNECTION_MODE_LAN, CONNECTION_MODE_AUTO} and self.lan is not None:
+            try:
+                data = await self.lan.async_fetch_state()
+                previous = self.data if isinstance(self.data, dict) else {}
+                data = self._merge_with_previous(data, previous)
+                # Keep last known cloud usage totals when LAN bridge omits them.
+                for usage_key in ("latest_usage", "today_usage", "month_usage"):
+                    if not data.get(usage_key) and previous.get(usage_key):
+                        data[usage_key] = previous.get(usage_key)
+                if not data.get("device") and previous.get("device"):
+                    data["device"] = previous.get("device")
+                self._apply_command_overrides(data)
+                self._persist_tokens_if_needed()
+                _LOGGER.debug(
+                    "Coordinator LAN update complete temp=%s detail=%s",
+                    data.get("current_temperature"),
+                    data.get("transport_detail"),
+                )
+                return data
+            except KomecoLanError as err:
+                lan_error = str(err)
+                _LOGGER.debug("LAN fetch failed mode=%s err=%s", mode, err)
+                if mode == CONNECTION_MODE_LAN:
+                    raise UpdateFailed(f"LAN unavailable: {err}") from err
+
         try:
             data = await self.api.async_fetch_state()
         except KomecoAuthError as err:
@@ -57,6 +104,31 @@ class KomecoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(str(err)) from err
 
         previous = self.data if isinstance(self.data, dict) else {}
+        data = self._merge_with_previous(data, previous)
+        data["transport"] = "cloud"
+        if lan_error:
+            data["lan_error"] = lan_error
+            data["transport_detail"] = "cloud_fallback"
+        else:
+            data["transport_detail"] = "cloud"
+        if self.lan is not None:
+            data["lan_host"] = self.lan.host
+            data["lan_port"] = self.lan.port
+            data["lan_probe"] = dict(self.lan.last_probe) if self.lan.last_probe else {}
+
+        self._apply_command_overrides(data)
+        self._persist_tokens_if_needed()
+        _LOGGER.debug(
+            "Coordinator polling update complete temp=%s thing=%s shadow_error=%s transport=%s",
+            data.get("current_temperature"),
+            data.get("shadow_thing_name"),
+            data.get("shadow_error"),
+            data.get("transport"),
+        )
+        return data
+
+    @staticmethod
+    def _merge_with_previous(data: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
         previous_values = previous.get("command_values", {})
         new_values = data.get("command_values", {})
         if isinstance(previous_values, dict) and isinstance(new_values, dict):
@@ -72,26 +144,41 @@ class KomecoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for usage_key in ("today_usage", "month_usage"):
             if not data.get(usage_key) and previous.get(usage_key):
                 data[usage_key] = previous.get(usage_key)
-        self._apply_command_overrides(data)
-
-        self._persist_tokens_if_needed()
-        _LOGGER.debug(
-            "Coordinator polling update complete temp=%s thing=%s shadow_error=%s",
-            data.get("current_temperature"),
-            data.get("shadow_thing_name"),
-            data.get("shadow_error"),
-        )
         return data
 
     async def async_send_command(self, payload: dict[str, Any]) -> None:
         """Send device command and refresh data."""
-        _LOGGER.debug("Coordinator sending command payload=%s", payload)
-        try:
-            await self.api.async_send_command(payload)
-        except KomecoAuthError as err:
-            raise ConfigEntryAuthFailed(str(err)) from err
-        except KomecoApiError as err:
-            raise UpdateFailed(str(err)) from err
+        _LOGGER.debug(
+            "Coordinator sending command payload=%s mode=%s",
+            payload,
+            self.connection_mode,
+        )
+        mode = self.connection_mode
+        sent_via = "cloud"
+
+        if mode in {CONNECTION_MODE_LAN, CONNECTION_MODE_AUTO} and self.lan is not None:
+            try:
+                await self.lan.async_send_command(payload)
+                sent_via = "lan"
+            except KomecoLanError as err:
+                _LOGGER.debug("LAN command failed mode=%s err=%s", mode, err)
+                if mode == CONNECTION_MODE_LAN:
+                    raise UpdateFailed(f"LAN unavailable: {err}") from err
+                # auto → cloud fallback
+                try:
+                    await self.api.async_send_command(payload)
+                except KomecoAuthError as auth_err:
+                    raise ConfigEntryAuthFailed(str(auth_err)) from auth_err
+                except KomecoApiError as api_err:
+                    raise UpdateFailed(str(api_err)) from api_err
+                sent_via = "cloud_fallback"
+        else:
+            try:
+                await self.api.async_send_command(payload)
+            except KomecoAuthError as err:
+                raise ConfigEntryAuthFailed(str(err)) from err
+            except KomecoApiError as err:
+                raise UpdateFailed(str(err)) from err
 
         if isinstance(self.data, dict):
             merged = dict(self.data)
@@ -100,11 +187,17 @@ class KomecoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if key in payload:
                     command_values[key] = payload[key]
             merged["command_values"] = command_values
+            merged["transport"] = "lan" if sent_via == "lan" else "cloud"
+            merged["transport_detail"] = sent_via
             self.async_set_updated_data(merged)
         self._set_command_overrides(payload)
 
         await self.async_request_refresh()
-        _LOGGER.debug("Coordinator command flow complete payload=%s", payload)
+        _LOGGER.debug(
+            "Coordinator command flow complete payload=%s sent_via=%s",
+            payload,
+            sent_via,
+        )
 
     def _set_command_overrides(self, payload: dict[str, Any]) -> None:
         expires_at = monotonic() + COMMAND_OVERRIDE_SECONDS
@@ -169,6 +262,11 @@ class KomecoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Apply a realtime shadow update from MQTT."""
         if not isinstance(reported, dict) or not reported:
             return
+        # Prefer not to clobber a live LAN poll with stale cloud push while in LAN-only mode.
+        if self.connection_mode == CONNECTION_MODE_LAN:
+            _LOGGER.debug("Ignoring realtime cloud shadow while connection_mode=lan")
+            return
+
         _LOGGER.debug(
             "Realtime shadow update received thing=%s keys=%s",
             thing_name,
@@ -235,6 +333,10 @@ class KomecoDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if temp_value is not None:
                 data["current_temperature"] = temp_value
                 break
+
+        if data.get("transport") != "lan":
+            data["transport"] = "cloud"
+            data["transport_detail"] = "cloud_mqtt"
 
         self._apply_command_overrides(data)
         self.async_set_updated_data(data)

@@ -13,6 +13,23 @@ CONF_ID_TOKEN = "id_token"
 CONF_ACCESS_TOKEN = "access_token"
 CONF_SUB = "sub"
 
+# LAN / transport options (config entry options)
+CONF_CONNECTION_MODE = "connection_mode"
+CONF_LAN_HOST = "lan_host"
+CONF_LAN_PORT = "lan_port"
+CONF_LAN_SSL = "lan_ssl"
+
+CONNECTION_MODE_CLOUD = "cloud"
+CONNECTION_MODE_LAN = "lan"
+CONNECTION_MODE_AUTO = "auto"
+CONNECTION_MODES = (
+    CONNECTION_MODE_CLOUD,
+    CONNECTION_MODE_LAN,
+    CONNECTION_MODE_AUTO,
+)
+DEFAULT_CONNECTION_MODE = CONNECTION_MODE_CLOUD
+DEFAULT_LAN_PORT = 80
+
 PLATFORMS = ["water_heater", "switch", "number", "select", "sensor", "binary_sensor"]
 
 DEFAULT_SCAN_INTERVAL = timedelta(seconds=30)
